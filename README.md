@@ -1,4 +1,3 @@
-# telegramm-bot```markdown
 # 🤖 SUPER BOT
 
 ### Telegram бот + Веб-панель управления с ИИ (Mistral AI) и мониторингом macOS
