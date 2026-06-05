@@ -271,9 +271,7 @@ SOFTWARE.
 
 ## 📧 Контакты
 
-- **Автор:** Artem Sorokin
-- **Telegram:** [@iamkinger]
-- **GitHub:** [данный]
+Почта - foxi.pro2008@gmail.com
 
 ---
 
