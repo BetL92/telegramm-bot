@@ -91,8 +91,8 @@
 
 ### 1. Клонирование репозитория
 ```bash
-git clone https://github.com/yourusername/super-bot.git
-cd super-bot
+git clone https://github.com/kinger_/telegramm-bot.git
+cd telegramm-bot
 ```
 
 ### 2. Создание виртуального окружения
