@@ -19,18 +19,19 @@ import psutil
 import platform
 import socket
 from datetime import datetime, timedelta
-from flask import Flask, render_template_string, jsonify, request, session
+from flask import Flask, render_template_string, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
+from telegram.request import HTTPXRequest
 
 # ====================================================================================================
 # НАСТРОЙКИ
 # ====================================================================================================
-BOT_TOKEN = "твой тоген телеграмм бота"
-MISTRAL_API_KEY = "твой api ключ"
-OWNER_ID = твой айди телеграмма
+BOT_TOKEN = "8373434295:AAF5juv7CCf9q8-e7R8x6azo6BiwrcW6dik"
+MISTRAL_API_KEY = "HejUxipp0uKBcnsLqc06KQv3pDryQCKq"
+OWNER_ID = 7607529648
 
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 5000
@@ -184,7 +185,7 @@ def get_recent_commands(limit=30):
     return [{"command": row[0], "result": row[1][:100], "time": row[2]} for row in rows]
 
 # ====================================================================================================
-# УПРАВЛЕНИЕ КОМПЬЮТЕРОМ (ТОЛЬКО РАБОЧИЕ ФУНКЦИИ)
+# УПРАВЛЕНИЕ КОМПЬЮТЕРОМ (ВСЕ ФУНКЦИИ)
 # ====================================================================================================
 def run_apple(script):
     subprocess.run(['osascript', '-e', script], capture_output=True)
@@ -221,8 +222,8 @@ def screenshot_area():
         return None
 
 def lock_screen():
-    run_apple('keystroke "q" using {command down, control down}')
-    return "🔒 Блокировка"
+    subprocess.run(['pmset', 'displaysleepnow'], capture_output=True)
+    return "🔒 Экран заблокирован"
 
 def sleep_mode():
     subprocess.run(['pmset', 'sleepnow'])
@@ -232,11 +233,27 @@ def show_desktop():
     run_apple('key code 53 using command down')
     return "🖥️ Рабочий стол"
 
+def shutdown_computer():
+    subprocess.run(['osascript', '-e', 'tell app "System Events" to shut down'], capture_output=True)
+    return "🔌 Компьютер выключается..."
+
+def restart_computer():
+    subprocess.run(['osascript', '-e', 'tell app "System Events" to restart'], capture_output=True)
+    return "🔄 Компьютер перезагружается..."
+
 def execute_pc_action(action):
     actions = {
-        "volume_up": volume_up, "volume_down": volume_down, "mute": mute, "unmute": unmute,
-        "screenshot": screenshot, "screenshot_area": screenshot_area,
-        "lock": lock_screen, "sleep": sleep_mode, "show_desktop": show_desktop
+        "volume_up": volume_up,
+        "volume_down": volume_down,
+        "mute": mute,
+        "unmute": unmute,
+        "screenshot": screenshot,
+        "screenshot_area": screenshot_area,
+        "lock": lock_screen,
+        "sleep": sleep_mode,
+        "show_desktop": show_desktop,
+        "shutdown": shutdown_computer,
+        "restart": restart_computer
     }
     if action in actions:
         return actions[action]()
@@ -335,21 +352,6 @@ def get_battery_info():
     except:
         return {"percent": 0, "power_plugged": False, "seconds_left": -1}
 
-def get_processes_info():
-    try:
-        processes = []
-        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status', 'memory_rss']):
-            try:
-                info = proc.info
-                info['memory_mb'] = info.get('memory_rss', 0) / (1024 * 1024)
-                processes.append(info)
-            except:
-                pass
-        processes.sort(key=lambda x: x.get('cpu_percent', 0), reverse=True)
-        return processes[:25]
-    except:
-        return []
-
 def get_system_info_full():
     try:
         return {
@@ -365,33 +367,47 @@ def get_system_info_full():
     except:
         return {"hostname": "unknown", "os": "unknown", "version": "unknown", "processor": "unknown", "uptime": "unknown"}
 
-def get_temperature_info():
-    try:
-        temps = psutil.sensors_temperatures()
-        result = {}
-        for name, entries in temps.items():
-            result[name] = [{"current": entry.current, "high": entry.high, "critical": entry.critical} for entry in entries]
-        return result
-    except:
-        return {}
+def get_system_info_text():
+    cpu = get_cpu_info()
+    mem = get_memory_info()
+    disk = get_disk_info()
+    net = get_network_info()
+    battery = get_battery_info()
+    sys_info = get_system_info_full()
+    
+    text = f"""
+💻 *СИСТЕМНАЯ ИНФОРМАЦИЯ*
+━━━━━━━━━━━━━━━━━━━━━━
 
-def get_connections_info():
-    try:
-        conns = psutil.net_connections(kind='inet')
-        result = []
-        for conn in conns[:50]:
-            result.append({
-                "fd": conn.fd,
-                "family": str(conn.family),
-                "type": str(conn.type),
-                "laddr": f"{conn.laddr.ip}:{conn.laddr.port}" if conn.laddr else None,
-                "raddr": f"{conn.raddr.ip}:{conn.raddr.port}" if conn.raddr else None,
-                "status": conn.status,
-                "pid": conn.pid
-            })
-        return result
-    except:
-        return []
+🖥️ *ОС:* {sys_info['os']}
+💻 *Хост:* {sys_info['hostname']}
+🔄 *Аптайм:* {sys_info['uptime']}
+⚡ *Python:* {sys_info['python_version']}
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*CPU:*
+📊 Загрузка: {cpu['percent']}%
+🔢 Ядра: {cpu['cores']}
+📈 Частота: {cpu['freq_current']:.0f}/{cpu['freq_max']:.0f} МГц
+📉 Нагрузка: {cpu['load_avg_1min']:.2f}, {cpu['load_avg_5min']:.2f}, {cpu['load_avg_15min']:.2f}
+
+*ПАМЯТЬ:*
+💾 RAM: {mem['percent']}% ({mem['used']//(1024**3)}/{mem['total']//(1024**3)} GB)
+🔄 Swap: {mem['swap_percent']}%
+
+*ДИСК:*
+💽 Занято: {disk['percent']}% ({disk['used']//(1024**3)}/{disk['total']//(1024**3)} GB)
+
+*СЕТЬ:*
+📡 Отправлено: {net['bytes_sent']//(1024**2)} MB
+📥 Получено: {net['bytes_recv']//(1024**2)} MB
+
+*БАТАРЕЯ:*
+🔋 Заряд: {battery['percent']}%
+{'🔌 На зарядке' if battery['power_plugged'] else '🔋 От батареи'}
+"""
+    return text
 
 # ====================================================================================================
 # TELEGRAM БОТ
@@ -406,7 +422,8 @@ MAIN_MENU = ReplyKeyboardMarkup([
 PC_MENU = ReplyKeyboardMarkup([
     ["🔊 ГРОМЧЕ", "🔉 ТИШЕ", "🔇 МУТ", "🔊 ВКЛ"],
     ["📸 СКРИНШОТ", "✂️ ОБЛАСТЬ", "🔒 БЛОК", "💤 СОН"],
-    ["🖥️ ДЕСКТОП", "◀️ НАЗАД"]
+    ["🖥️ ДЕСКТОП", "🔄 ПЕРЕЗАГРУЗКА", "🔌 ВЫКЛЮЧЕНИЕ"],
+    ["◀️ НАЗАД"]
 ], resize_keyboard=True)
 
 def is_owner(user_id):
@@ -534,48 +551,6 @@ def delete_password(pass_id):
     conn.close()
     return f"🗑️ Пароль удалён"
 
-def get_system_info_text():
-    cpu = get_cpu_info()
-    mem = get_memory_info()
-    disk = get_disk_info()
-    net = get_network_info()
-    battery = get_battery_info()
-    sys_info = get_system_info_full()
-    
-    text = f"""
-💻 *СИСТЕМНАЯ ИНФОРМАЦИЯ*
-━━━━━━━━━━━━━━━━━━━━━━
-
-🖥️ *ОС:* {sys_info['os']}
-💻 *Хост:* {sys_info['hostname']}
-🔄 *Аптайм:* {sys_info['uptime']}
-⚡ *Python:* {sys_info['python_version']}
-
-━━━━━━━━━━━━━━━━━━━━━━
-
-*CPU:*
-📊 Загрузка: {cpu['percent']}%
-🔢 Ядра: {cpu['cores']}
-📈 Частота: {cpu['freq_current']:.0f}/{cpu['freq_max']:.0f} МГц
-📉 Нагрузка: {cpu['load_avg_1min']:.2f}, {cpu['load_avg_5min']:.2f}, {cpu['load_avg_15min']:.2f}
-
-*ПАМЯТЬ:*
-💾 RAM: {mem['percent']}% ({mem['used']//(1024**3)}/{mem['total']//(1024**3)} GB)
-🔄 Swap: {mem['swap_percent']}%
-
-*ДИСК:*
-💽 Занято: {disk['percent']}% ({disk['used']//(1024**3)}/{disk['total']//(1024**3)} GB)
-
-*СЕТЬ:*
-📡 Отправлено: {net['bytes_sent']//(1024**2)} MB
-📥 Получено: {net['bytes_recv']//(1024**2)} MB
-
-*БАТАРЕЯ:*
-🔋 Заряд: {battery['percent']}%
-{'🔌 На зарядке' if battery['power_plugged'] else '🔋 От батареи'}
-"""
-    return text
-
 # ====================================================================================================
 # ТЕЛЕГРАМ ОБРАБОТЧИКИ
 # ====================================================================================================
@@ -586,12 +561,12 @@ async def start(update, context):
         return
     save_user(user.id, user.first_name)
     await update.message.reply_text(
-        f"🤖 *СУПЕР БОТ v37* — TELEGRAM + WEB\n\n"
+        f"🤖 *СУПЕР БОТ v38* — TELEGRAM + WEB\n\n"
         f"🔥 Привет, {user.first_name}!\n\n"
         f"*ВОЗМОЖНОСТИ:*\n"
         f"• 🧠 ИИ чат (Mistral)\n"
         f"• 📷 Анализ фото (Pixtral)\n"
-        f"• 🖥️ Управление Mac\n"
+        f"• 🖥️ Управление Mac (громкость, скриншоты, блокировка, сон, выключение, перезагрузка)\n"
         f"• 📝 Заметки\n"
         f"• 📋 Задачи\n"
         f"• ⭐ Закладки\n"
@@ -631,21 +606,28 @@ async def handle_text(update, context):
         await update.message.reply_text(info, parse_mode="Markdown")
     elif text == "🌐 ВЕБ ПАНЕЛЬ":
         await update.message.reply_text("🌐 *Веб-панель*\nhttp://localhost:5000\n\nОткрой в браузере на этом же компьютере.", parse_mode="Markdown")
-        await update.message.reply_text("🌐 *Веб-панель*\nhttp://localhost:5000", parse_mode="Markdown", reply_markup=keyboard)
     elif text == "📊 СТАТИСТИКА":
         users, cmds = get_stats()
         user_cmds = get_stats(user_id)
         await update.message.reply_text(f"📊 *Статистика*\n👥 {users} пользователей\n📝 {cmds} команд\n👤 Твоих: {user_cmds}", parse_mode="Markdown")
     elif text == "❓ ПОМОЩЬ":
-        await update.message.reply_text("❓ *Помощь*\n\n🧠 ИИ ЧАТ — задай вопрос\n📷 АНАЛИЗ ФОТО — отправь картинку\n🖥️ УПРАВЛЕНИЕ ПК — клавиши, скриншоты\n📝 ЗАМЕТКИ — сохраняй важное\n📋 ЗАДАЧИ — список дел\n⭐ ЗАКЛАДКИ — сохраняй ссылки\n🔐 ПАРОЛИ — храни пароли\n💻 СИСТЕМА — мониторинг Mac\n🌐 ВЕБ ПАНЕЛЬ — http://localhost:5000", parse_mode="Markdown")
+        await update.message.reply_text("❓ *Помощь*\n\n🧠 ИИ ЧАТ — задай вопрос\n📷 АНАЛИЗ ФОТО — отправь картинку\n🖥️ УПРАВЛЕНИЕ ПК — клавиши, скриншоты, блокировка, сон, выключение, перезагрузка\n📝 ЗАМЕТКИ — сохраняй важное\n📋 ЗАДАЧИ — список дел\n⭐ ЗАКЛАДКИ — сохраняй ссылки\n🔐 ПАРОЛИ — храни пароли\n💻 СИСТЕМА — мониторинг Mac\n🌐 ВЕБ ПАНЕЛЬ — http://localhost:5000", parse_mode="Markdown")
     elif text == "◀️ НАЗАД":
         await update.message.reply_text("◀️ Главное меню", reply_markup=MAIN_MENU)
         context.user_data['mode'] = None
-    elif text in ["🔊 ГРОМЧЕ", "🔉 ТИШЕ", "🔇 МУТ", "🔊 ВКЛ", "📸 СКРИНШОТ", "✂️ ОБЛАСТЬ", "🔒 БЛОК", "💤 СОН", "🖥️ ДЕСКТОП"]:
+    elif text in ["🔊 ГРОМЧЕ", "🔉 ТИШЕ", "🔇 МУТ", "🔊 ВКЛ", "📸 СКРИНШОТ", "✂️ ОБЛАСТЬ", "🔒 БЛОК", "💤 СОН", "🖥️ ДЕСКТОП", "🔄 ПЕРЕЗАГРУЗКА", "🔌 ВЫКЛЮЧЕНИЕ"]:
         action_map = {
-            "🔊 ГРОМЧЕ": "volume_up", "🔉 ТИШЕ": "volume_down", "🔇 МУТ": "mute", "🔊 ВКЛ": "unmute",
-            "📸 СКРИНШОТ": "screenshot", "✂️ ОБЛАСТЬ": "screenshot_area",
-            "🔒 БЛОК": "lock", "💤 СОН": "sleep", "🖥️ ДЕСКТОП": "show_desktop"
+            "🔊 ГРОМЧЕ": "volume_up",
+            "🔉 ТИШЕ": "volume_down",
+            "🔇 МУТ": "mute",
+            "🔊 ВКЛ": "unmute",
+            "📸 СКРИНШОТ": "screenshot",
+            "✂️ ОБЛАСТЬ": "screenshot_area",
+            "🔒 БЛОК": "lock",
+            "💤 СОН": "sleep",
+            "🖥️ ДЕСКТОП": "show_desktop",
+            "🔄 ПЕРЕЗАГРУЗКА": "restart",
+            "🔌 ВЫКЛЮЧЕНИЕ": "shutdown"
         }
         if text in action_map:
             if text in ["📸 СКРИНШОТ", "✂️ ОБЛАСТЬ"]:
@@ -870,7 +852,7 @@ async def cmd_delpass(update, context):
         await update.message.reply_text("❌ Введи ID")
 
 # ====================================================================================================
-# ВЕБ-СЕРВЕР (КРАСИВЫЙ ОГРОМНЫЙ HTML)
+# ВЕБ-СЕРВЕР
 # ====================================================================================================
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'super-secret-key-2026'
@@ -883,417 +865,828 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>SUPER BOT v37 | Ultimate Control Center</title>
+    <title>SUPER BOT | Ultimate Control Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100;14..32,200;14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800;14..32,900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-dark: #0a0a0f;
+            --bg-card: #111118;
+            --bg-card-hover: #181820;
+            --border: #1f1f2a;
+            --border-glow: #2a2a3a;
+            --text-primary: #e8e8f0;
+            --text-secondary: #8a8a98;
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.5);
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+        }
+
         body {
             font-family: 'Inter', sans-serif;
-            background: linear-gradient(135deg, #0a0a1a 0%, #1a0b2e 50%, #0f0f1a 100%);
+            background: var(--bg-dark);
             min-height: 100vh;
+            color: var(--text-primary);
             overflow-x: hidden;
-            color: #fff;
         }
-        /* Анимированный фон */
-        body::before {
-            content: '';
+
+        /* Анимированный градиентный фон */
+        .bg-gradient {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
-            background: 
-                radial-gradient(circle at 20% 50%, rgba(168,85,247,0.15) 0%, transparent 50%),
-                radial-gradient(circle at 80% 80%, rgba(236,72,153,0.1) 0%, transparent 50%),
-                repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 2px, transparent 2px, transparent 8px);
+            background: radial-gradient(circle at 20% 50%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 80%, rgba(139, 92, 246, 0.05) 0%, transparent 50%);
             pointer-events: none;
             z-index: 0;
         }
-        /* Частицы */
-        .particles {
+
+        /* Сетка на фоне */
+        .grid-bg {
             position: fixed;
-            width: 100%;
-            height: 100%;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: linear-gradient(var(--border) 1px, transparent 1px),
+                              linear-gradient(90deg, var(--border) 1px, transparent 1px);
+            background-size: 40px 40px;
+            opacity: 0.3;
             pointer-events: none;
             z-index: 0;
         }
-        .particle {
-            position: absolute;
-            background: linear-gradient(135deg, #a855f7, #ec4899);
-            border-radius: 50%;
-            opacity: 0.2;
-            animation: floatParticle 20s infinite;
-        }
-        @keyframes floatParticle {
-            0%,100% { transform: translateY(0) translateX(0); }
-            25% { transform: translateY(-80px) translateX(40px); }
-            50% { transform: translateY(0) translateX(80px); }
-            75% { transform: translateY(80px) translateX(40px); }
-        }
+
         .container {
             max-width: 1600px;
             margin: 0 auto;
-            padding: 25px;
+            padding: 30px;
             position: relative;
             z-index: 1;
         }
+
         /* Хедер */
         .header {
-            text-align: center;
             margin-bottom: 40px;
-            animation: fadeInDown 0.8s cubic-bezier(0.68,-0.55,0.265,1.55);
+            animation: fadeInDown 0.6s ease;
         }
+
         @keyframes fadeInDown {
-            from { opacity: 0; transform: translateY(-60px) rotateX(-30deg); }
-            to { opacity: 1; transform: translateY(0) rotateX(0); }
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
+
         .logo {
             display: flex;
             align-items: center;
-            justify-content: center;
-            gap: 15px;
-            margin-bottom: 20px;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-bottom: 30px;
         }
+
+        .logo-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
         .logo-icon {
-            width: 60px;
-            height: 60px;
-            background: linear-gradient(135deg, #a855f7, #ec4899);
-            border-radius: 20px;
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            animation: pulse 2s ease-in-out infinite;
         }
-        @keyframes pulse {
-            0%,100% { box-shadow: 0 0 0 0 rgba(168,85,247,0.7); }
-            50% { box-shadow: 0 0 0 20px rgba(168,85,247,0); }
+
+        .logo-icon i {
+            font-size: 1.8em;
+            color: white;
         }
-        .logo-icon i { font-size: 2em; color: white; }
-        h1 {
-            font-size: 2.8em;
-            font-weight: 800;
-            background: linear-gradient(135deg, #fff, #a855f7, #ec4899, #fff);
-            background-size: 200% auto;
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-            animation: shimmer 3s linear infinite;
+
+        .logo-text h1 {
+            font-size: 1.8em;
+            font-weight: 700;
+            letter-spacing: -0.02em;
         }
-        @keyframes shimmer {
-            0% { background-position: 0% center; }
-            100% { background-position: 200% center; }
+
+        .logo-text p {
+            color: var(--text-secondary);
+            font-size: 0.85em;
         }
-        .subtitle { color: #a0a0b0; margin-top: 10px; }
-        .badge-container {
+
+        .stats-badges {
             display: flex;
-            justify-content: center;
-            gap: 15px;
-            flex-wrap: wrap;
-            margin-top: 20px;
+            gap: 12px;
         }
+
         .badge {
-            background: rgba(255,255,255,0.05);
-            backdrop-filter: blur(10px);
-            padding: 6px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 8px 16px;
             border-radius: 30px;
             font-size: 0.8em;
-            border: 1px solid rgba(168,85,247,0.3);
-            transition: 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
-        .badge:hover { border-color: #a855f7; transform: translateY(-2px); }
+
+        .badge i {
+            color: var(--accent);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
         /* Статистика */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 25px;
-            margin-bottom: 35px;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
         }
+
         .stat-card {
-            background: rgba(20,15,40,0.6);
-            backdrop-filter: blur(15px);
-            border: 1px solid rgba(168,85,247,0.3);
-            border-radius: 24px;
-            padding: 25px;
-            text-align: center;
-            transition: 0.3s;
-            position: relative;
-            overflow: hidden;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 20px;
+            transition: all 0.3s;
+            animation: fadeInUp 0.5s ease;
+            animation-fill-mode: both;
         }
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
-            transition: left 0.5s;
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
-        .stat-card:hover::before { left: 100%; }
-        .stat-card:hover { transform: translateY(-5px); border-color: #a855f7; box-shadow: 0 20px 40px rgba(0,0,0,0.3); }
-        .stat-icon { font-size: 2.2em; margin-bottom: 15px; }
-        .stat-value { font-size: 2.2em; font-weight: 800; background: linear-gradient(135deg, #a855f7, #ec4899); -webkit-background-clip: text; background-clip: text; color: transparent; margin-bottom: 8px; }
-        .stat-label { font-size: 0.85em; color: #a0a0b0; text-transform: uppercase; letter-spacing: 1px; }
-        /* Основная сетка */
-        .main-grid {
+
+        .stat-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+            background: var(--bg-card-hover);
+        }
+
+        .stat-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .stat-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .stat-icon i {
+            font-size: 1.5em;
+            color: var(--accent);
+        }
+
+        .stat-change {
+            font-size: 0.75em;
+            padding: 4px 8px;
+            border-radius: 20px;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+        }
+
+        .stat-value {
+            font-size: 2.2em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.85em;
+        }
+
+        /* Карточки */
+        .cards-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 25px;
             margin-bottom: 25px;
         }
-        @media (max-width: 1100px) { .main-grid { grid-template-columns: 1fr; } }
-        /* Карточки */
-        .card {
-            background: rgba(15,15,35,0.6);
-            backdrop-filter: blur(15px);
-            border: 1px solid rgba(168,85,247,0.2);
-            border-radius: 28px;
-            overflow: hidden;
-            transition: 0.4s;
+
+        @media (max-width: 1100px) {
+            .cards-grid {
+                grid-template-columns: 1fr;
+            }
         }
-        .card:hover { border-color: #a855f7; transform: translateY(-3px); box-shadow: 0 25px 50px rgba(0,0,0,0.3); }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            overflow: hidden;
+            transition: all 0.3s;
+            animation: fadeInUp 0.5s ease;
+            animation-fill-mode: both;
+        }
+
+        .card:hover {
+            border-color: var(--border-glow);
+            transform: translateY(-2px);
+        }
+
         .card-header {
-            background: linear-gradient(135deg, rgba(139,92,246,0.15), rgba(15,10,35,0.9));
-            padding: 20px 25px;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
-            gap: 15px;
-            border-bottom: 1px solid rgba(168,85,247,0.2);
+            justify-content: space-between;
         }
-        .card-header i { font-size: 1.6em; color: #a855f7; }
-        .card-header h2 { font-size: 1.2em; font-weight: 600; flex: 1; }
-        .card-header .badge-count {
-            background: linear-gradient(135deg, #a855f7, #ec4899);
+
+        .card-header h2 {
+            font-size: 1.2em;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-header h2 i {
+            color: var(--accent);
+            font-size: 1.2em;
+        }
+
+        .card-badge {
+            background: rgba(59, 130, 246, 0.1);
             padding: 4px 12px;
             border-radius: 20px;
             font-size: 0.7em;
-            font-weight: 600;
+            color: var(--accent);
         }
-        .card-content { padding: 25px; }
+
+        .card-content {
+            padding: 24px;
+        }
+
         /* Кнопки управления */
         .control-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
             gap: 12px;
         }
-        .action-btn {
-            background: linear-gradient(135deg, rgba(139,92,246,0.2), rgba(15,10,35,0.8));
-            border: 1px solid rgba(168,85,247,0.3);
+
+        .ctrl-btn {
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
             padding: 12px;
-            border-radius: 16px;
+            border-radius: 14px;
             cursor: pointer;
+            font-size: 0.8em;
             font-weight: 500;
-            font-size: 0.85em;
-            transition: 0.2s;
-            color: #fff;
+            transition: all 0.2s;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
+            color: var(--text-primary);
         }
-        .action-btn:hover {
-            background: linear-gradient(135deg, #a855f7, #ec4899);
+
+        .ctrl-btn i {
+            font-size: 0.9em;
+        }
+
+        .ctrl-btn:hover {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.05);
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(139,92,246,0.3);
         }
+
         /* Системная информация */
-        .system-grid {
+        .sys-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 15px;
-            margin-bottom: 20px;
         }
-        .system-item {
-            background: rgba(10,5,25,0.6);
+
+        .sys-item {
+            background: var(--bg-dark);
             border-radius: 16px;
             padding: 15px;
-            text-align: center;
         }
-        .system-value { font-size: 1.5em; font-weight: 700; color: #a855f7; }
-        .system-label { font-size: 0.75em; color: #a0a0b0; margin-top: 5px; }
+
+        .sys-label {
+            font-size: 0.7em;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .sys-value {
+            font-size: 1.3em;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
         .progress-bar {
-            background: rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.05);
             border-radius: 10px;
-            height: 8px;
+            height: 6px;
             overflow: hidden;
-            margin-top: 10px;
         }
+
         .progress-fill {
-            background: linear-gradient(90deg, #a855f7, #ec4899);
+            background: linear-gradient(90deg, var(--accent), #8b5cf6);
             height: 100%;
             border-radius: 10px;
             transition: width 0.3s;
         }
-        /* Таблица команд */
-        .commands-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .commands-table th {
-            text-align: left;
-            padding: 12px;
-            color: #a855f7;
-            border-bottom: 1px solid rgba(168,85,247,0.2);
-            font-weight: 600;
-        }
-        .commands-table td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-        .commands-table tr:hover { background: rgba(139,92,246,0.1); }
-        .chart-container { height: 300px; position: relative; }
-        .commands-list {
+
+        /* История команд */
+        .history-list {
             max-height: 400px;
             overflow-y: auto;
         }
-        .commands-list::-webkit-scrollbar { width: 6px; }
-        .commands-list::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 10px; }
-        .commands-list::-webkit-scrollbar-thumb { background: #a855f7; border-radius: 10px; }
-        .command-item {
-            background: rgba(30,20,55,0.5);
-            padding: 12px 15px;
-            border-radius: 12px;
-            margin-bottom: 8px;
-            border-left: 3px solid #a855f7;
-            transition: 0.2s;
+
+        .history-list::-webkit-scrollbar {
+            width: 6px;
         }
-        .command-item:hover { background: rgba(50,35,80,0.6); transform: translateX(5px); }
-        .command-name { font-weight: 600; color: #a855f7; font-size: 0.85em; margin-bottom: 5px; }
-        .command-result { font-size: 0.8em; color: #a0a0b0; word-break: break-word; }
-        .command-time { font-size: 0.7em; color: #6a6a8a; margin-top: 5px; }
-        /* Уведомления */
-        .notification {
-            position: fixed;
-            bottom: 25px;
-            right: 25px;
-            background: linear-gradient(135deg, #a855f7, #ec4899);
-            padding: 14px 22px;
-            border-radius: 18px;
+
+        .history-list::-webkit-scrollbar-track {
+            background: var(--bg-dark);
+            border-radius: 10px;
+        }
+
+        .history-list::-webkit-scrollbar-thumb {
+            background: var(--border-glow);
+            border-radius: 10px;
+        }
+
+        .history-item {
+            background: var(--bg-dark);
+            padding: 14px;
+            border-radius: 14px;
+            margin-bottom: 10px;
+            border-left: 3px solid var(--accent);
+            transition: all 0.2s;
+        }
+
+        .history-item:hover {
+            transform: translateX(5px);
+            background: var(--bg-card-hover);
+        }
+
+        .history-command {
+            font-weight: 600;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+            color: var(--accent);
+        }
+
+        .history-result {
+            font-size: 0.8em;
+            color: var(--text-secondary);
+            word-break: break-word;
+        }
+
+        .history-time {
+            font-size: 0.7em;
+            color: var(--text-secondary);
+            margin-top: 8px;
             display: flex;
             align-items: center;
-            gap: 12px;
-            z-index: 1000;
-            animation: slideInRight 0.3s cubic-bezier(0.68,-0.55,0.265,1.55);
-            font-weight: 500;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            gap: 5px;
         }
-        @keyframes slideInRight {
-            from { opacity: 0; transform: translateX(100px); }
-            to { opacity: 1; transform: translateX(0); }
+
+        /* Графики */
+        .chart-container {
+            height: 280px;
+            position: relative;
         }
+
+        /* Адаптивность */
         @media (max-width: 768px) {
-            .container { padding: 15px; }
-            h1 { font-size: 1.8em; }
-            .stats-grid { grid-template-columns: repeat(2,1fr); }
-            .system-grid { grid-template-columns: 1fr; }
+            .container {
+                padding: 20px;
+            }
+            .logo {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .sys-grid {
+                grid-template-columns: 1fr;
+            }
         }
-        @media (max-width: 500px) { .stats-grid { grid-template-columns: 1fr; } }
-        .loader {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-radius: 50%;
-            border-top-color: #a855f7;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Пустое состояние */
         .empty-state {
             text-align: center;
             padding: 50px;
-            color: #a0a0b0;
+            color: var(--text-secondary);
         }
-        .empty-state i { font-size: 3em; margin-bottom: 15px; opacity: 0.5; }
+
+        .empty-state i {
+            font-size: 3em;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+
+        /* Уведомления */
+        .notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--accent);
+            border-radius: 16px;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(100px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* Отдельные классы */
+        .text-accent { color: var(--accent); }
+        .text-success { color: var(--success); }
+        .text-warning { color: var(--warning); }
+        .text-danger { color: var(--danger); }
+
+        .mt-2 { margin-top: 10px; }
     </style>
 </head>
 <body>
-    <div class="particles" id="particles"></div>
+    <div class="bg-gradient"></div>
+    <div class="grid-bg"></div>
+
     <div class="container">
         <div class="header">
             <div class="logo">
-                <div class="logo-icon"><i class="fas fa-crown"></i></div>
-                <h1>SUPER BOT v37</h1>
-            </div>
-            <div class="subtitle">МОЩНЫЙ ИИ-АССИСТЕНТ НА MISTRAL AI</div>
-            <div class="badge-container">
-                <div class="badge"><i class="fas fa-check-circle" style="color:#10b981;"></i> Система активна</div>
-                <div class="badge"><i class="fas fa-brain"></i> Mistral AI</div>
-                <div class="badge"><i class="fas fa-chart-line"></i> Real-time</div>
-                <div class="badge"><i class="fas fa-shield-alt"></i> Secure</div>
-            </div>
-        </div>
-        <div class="stats-grid">
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-value" id="users">0</div><div class="stat-label">Пользователей</div></div>
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-terminal"></i></div><div class="stat-value" id="commands">0</div><div class="stat-label">Всего команд</div></div>
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-calendar-day"></i></div><div class="stat-value" id="today">0</div><div class="stat-label">Сегодня</div></div>
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-microchip"></i></div><div class="stat-value" id="cpu">0%</div><div class="stat-label">CPU</div></div>
-        </div>
-        <div class="main-grid">
-            <div class="card">
-                <div class="card-header"><i class="fas fa-gamepad"></i><h2>Управление компьютером</h2><div class="badge-count">9 действий</div></div>
-                <div class="card-content"><div class="control-grid" id="controls"></div></div>
-            </div>
-            <div class="card">
-                <div class="card-header"><i class="fas fa-desktop"></i><h2>Мониторинг системы</h2><div class="badge-count">живые данные</div></div>
-                <div class="card-content">
-                    <div class="system-grid">
-                        <div class="system-item"><div class="system-value" id="cpu-val">0%</div><div class="system-label">CPU</div><div class="progress-bar"><div class="progress-fill" id="cpu-fill" style="width:0%"></div></div></div>
-                        <div class="system-item"><div class="system-value" id="mem-val">0%</div><div class="system-label">RAM</div><div class="progress-bar"><div class="progress-fill" id="mem-fill" style="width:0%"></div></div></div>
-                        <div class="system-item"><div class="system-value" id="disk-val">0%</div><div class="system-label">Диск</div><div class="progress-bar"><div class="progress-fill" id="disk-fill" style="width:0%"></div></div></div>
-                        <div class="system-item"><div class="system-value" id="battery-val">0%</div><div class="system-label">Батарея</div><div class="progress-bar"><div class="progress-fill" id="battery-fill" style="width:0%"></div></div></div>
+                <div class="logo-left">
+                    <div class="logo-icon">
+                        <i class="fas fa-crown"></i>
                     </div>
-                    <div class="system-item" style="margin-top:10px;"><div class="system-value" id="ip-val">0.0.0.0</div><div class="system-label">IP адрес</div></div>
+                    <div class="logo-text">
+                        <h1>SUPER BOT</h1>
+                        <p>AI-Powered Control Center</p>
+                    </div>
+                </div>
+                <div class="stats-badges">
+                    <div class="badge">
+                        <span class="status-dot"></span>
+                        System Online
+                    </div>
+                    <div class="badge">
+                        <i class="fas fa-brain"></i>
+                        Mistral AI
+                    </div>
+                    <div class="badge">
+                        <i class="fas fa-chart-line"></i>
+                        Real-time
+                    </div>
                 </div>
             </div>
-            <div class="card">
-                <div class="card-header"><i class="fas fa-chart-line"></i><h2>Активность за 7 дней</h2><div class="badge-count">динамика</div></div>
-                <div class="card-content"><canvas id="activity-chart" class="chart-container"></canvas></div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon"><i class="fas fa-users"></i></div>
+                    <div class="stat-change">+12%</div>
+                </div>
+                <div class="stat-value" id="users">0</div>
+                <div class="stat-label">Total Users</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon"><i class="fas fa-terminal"></i></div>
+                    <div class="stat-change">+5%</div>
+                </div>
+                <div class="stat-value" id="commands">0</div>
+                <div class="stat-label">Total Commands</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon"><i class="fas fa-calendar-day"></i></div>
+                    <div class="stat-change">Today</div>
+                </div>
+                <div class="stat-value" id="today">0</div>
+                <div class="stat-label">Commands Today</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-icon"><i class="fas fa-microchip"></i></div>
+                    <div class="stat-change">Load</div>
+                </div>
+                <div class="stat-value" id="cpu">0%</div>
+                <div class="stat-label">CPU Usage</div>
+            </div>
+        </div>
+
+        <div class="cards-grid">
+            <!-- Управление компьютером -->
             <div class="card">
-                <div class="card-header"><i class="fas fa-chart-bar"></i><h2>Топ команд</h2><div class="badge-count">по популярности</div></div>
-                <div class="card-content"><canvas id="top-chart" class="chart-container"></canvas></div></div>
-            <div class="card" style="grid-column:1/-1;">
-                <div class="card-header"><i class="fas fa-history"></i><h2>История команд</h2><i class="fas fa-sync-alt" id="refresh-btn" style="cursor:pointer;opacity:0.7;"></i></div>
-                <div class="card-content"><div id="commands-list" class="commands-list"></div></div>
+                <div class="card-header">
+                    <h2><i class="fas fa-gamepad"></i> Computer Control</h2>
+                    <div class="card-badge">12 actions</div>
+                </div>
+                <div class="card-content">
+                    <div class="control-grid" id="controls"></div>
+                </div>
+            </div>
+
+            <!-- Мониторинг системы -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-desktop"></i> System Monitor</h2>
+                    <div class="card-badge">Live</div>
+                </div>
+                <div class="card-content">
+                    <div class="sys-grid">
+                        <div class="sys-item">
+                            <div class="sys-label">RAM Usage</div>
+                            <div class="sys-value" id="ram-value">0%</div>
+                            <div class="progress-bar"><div class="progress-fill" id="ram-fill" style="width:0%"></div></div>
+                        </div>
+                        <div class="sys-item">
+                            <div class="sys-label">Disk Usage</div>
+                            <div class="sys-value" id="disk-value">0%</div>
+                            <div class="progress-bar"><div class="progress-fill" id="disk-fill" style="width:0%"></div></div>
+                        </div>
+                        <div class="sys-item">
+                            <div class="sys-label">Battery</div>
+                            <div class="sys-value" id="battery-value">0%</div>
+                            <div class="progress-bar"><div class="progress-fill" id="battery-fill" style="width:0%"></div></div>
+                        </div>
+                        <div class="sys-item">
+                            <div class="sys-label">IP Address</div>
+                            <div class="sys-value" id="ip-value">0.0.0.0</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- График активности -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-chart-line"></i> Activity Chart</h2>
+                    <div class="card-badge">7 days</div>
+                </div>
+                <div class="card-content">
+                    <canvas id="activityChart" class="chart-container"></canvas>
+                </div>
+            </div>
+
+            <!-- Топ команд -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-chart-bar"></i> Top Commands</h2>
+                    <div class="card-badge">Popularity</div>
+                </div>
+                <div class="card-content">
+                    <canvas id="topChart" class="chart-container"></canvas>
+                </div>
+            </div>
+
+            <!-- История команд -->
+            <div class="card" style="grid-column: 1 / -1;">
+                <div class="card-header">
+                    <h2><i class="fas fa-history"></i> Command History</h2>
+                    <i class="fas fa-sync-alt" id="refreshBtn" style="cursor: pointer; opacity: 0.7;"></i>
+                </div>
+                <div class="card-content">
+                    <div id="historyList" class="history-list"></div>
+                </div>
             </div>
         </div>
     </div>
+
     <script>
-        const actions = ['volume_up', 'volume_down', 'mute', 'unmute', 'screenshot', 'screenshot_area', 'lock', 'sleep', 'show_desktop'];
+        const socket = io();
+
+        const actions = [
+            { name: 'volume_up', icon: 'fa-volume-up', label: 'Vol +' },
+            { name: 'volume_down', icon: 'fa-volume-down', label: 'Vol -' },
+            { name: 'mute', icon: 'fa-volume-mute', label: 'Mute' },
+            { name: 'unmute', icon: 'fa-volume-off', label: 'Unmute' },
+            { name: 'screenshot', icon: 'fa-camera', label: 'Screen' },
+            { name: 'screenshot_area', icon: 'fa-crop', label: 'Area' },
+            { name: 'lock', icon: 'fa-lock', label: 'Lock' },
+            { name: 'sleep', icon: 'fa-moon', label: 'Sleep' },
+            { name: 'show_desktop', icon: 'fa-desktop', label: 'Desktop' },
+            { name: 'restart', icon: 'fa-power-off', label: 'Restart' },
+            { name: 'shutdown', icon: 'fa-circle-stop', label: 'Shutdown' }
+        ];
+
         const container = document.getElementById('controls');
-        const icons = {volume_up:'fa-volume-up',volume_down:'fa-volume-down',mute:'fa-volume-mute',unmute:'fa-volume-off',screenshot:'fa-camera',screenshot_area:'fa-crop',lock:'fa-lock',sleep:'fa-moon',show_desktop:'fa-desktop'};
-        actions.forEach(a=>{let btn=document.createElement('button');btn.className='action-btn';btn.innerHTML=`<i class="fas ${icons[a]}"></i> ${a.replace('_',' ')}`;btn.onclick=()=>executeAction(a);container.appendChild(btn);});
-        function executeAction(a){showNotification(`Выполняется: ${a}`);fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})}).then(r=>r.json()).then(d=>{if(d.success)showNotification(d.message);else showNotification('Ошибка');loadData();});}
-        function showNotification(msg,type='info'){let n=document.createElement('div');n.className='notification';n.innerHTML=`<i class="fas ${type==='success'?'fa-check-circle':'fa-info-circle'}"></i> ${msg}`;document.body.appendChild(n);setTimeout(()=>n.remove(),3000);}
-        let activityChart,topChart;
-        function loadData(){
-            fetch('/api/stats').then(r=>r.json()).then(d=>{document.getElementById('users').innerText=d.users;document.getElementById('commands').innerText=d.commands;document.getElementById('today').innerText=d.today||0;});
-            fetch('/api/system').then(r=>r.json()).then(d=>{
-                document.getElementById('cpu-val').innerText=d.cpu+'%';document.getElementById('cpu-fill').style.width=d.cpu+'%';
-                document.getElementById('mem-val').innerText=d.memory+'%';document.getElementById('mem-fill').style.width=d.memory+'%';
-                document.getElementById('disk-val').innerText=d.disk+'%';document.getElementById('disk-fill').style.width=d.disk+'%';
-                document.getElementById('battery-val').innerText=d.battery+'%';document.getElementById('battery-fill').style.width=d.battery+'%';
-                document.getElementById('ip-val').innerText=d.ip;
-            });
-            fetch('/api/commands').then(r=>r.json()).then(data=>{
-                const div=document.getElementById('commands-list');
-                if(data.length===0){div.innerHTML='<div class="empty-state"><i class="fas fa-inbox"></i><br>Нет команд</div>';return;}
-                div.innerHTML=data.map(c=>`<div class="command-item"><div class="command-name"><i class="fas fa-terminal"></i> ${c.command}</div><div class="command-result">${c.result.substring(0,100)}${c.result.length>100?'...':''}</div><div class="command-time"><i class="far fa-clock"></i> ${new Date(c.time).toLocaleString()}</div></div>`).join('');
-            });
-            fetch('/api/charts').then(r=>r.json()).then(data=>{
-                const dates=Object.keys(data.daily||{}).sort().reverse().slice(0,7).reverse(),counts=dates.map(d=>data.daily[d]||0);
-                if(activityChart)activityChart.destroy();
-                activityChart=new Chart(document.getElementById('activity-chart'),{type:'line',data:{labels:dates,datasets:[{label:'Команды',data:counts,borderColor:'#a855f7',backgroundColor:'rgba(168,85,247,0.1)',fill:true,tension:0.4,pointBackgroundColor:'#ec4899',pointBorderColor:'#fff'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#e8e8ff'}}},scales:{y:{grid:{color:'rgba(255,255,255,0.1)'},ticks:{color:'#a0a0b0'}},x:{grid:{color:'rgba(255,255,255,0.1)'},ticks:{color:'#a0a0b0'}}}}});
-                if(topChart)topChart.destroy();
-                const topData=data.top_commands||[];
-                topChart=new Chart(document.getElementById('top-chart'),{type:'bar',data:{labels:topData.map(t=>t.name),datasets:[{label:'Количество',data:topData.map(t=>t.count),backgroundColor:'rgba(168,85,247,0.7)',borderRadius:8}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#e8e8ff'}}},scales:{y:{grid:{color:'rgba(255,255,255,0.1)'},ticks:{color:'#a0a0b0'}},x:{ticks:{color:'#a0a0b0',maxRotation:45,minRotation:45}}}}});
+        actions.forEach(action => {
+            const btn = document.createElement('button');
+            btn.className = 'ctrl-btn';
+            btn.innerHTML = `<i class="fas ${action.icon}"></i> ${action.label}`;
+            btn.onclick = () => executeAction(action.name);
+            container.appendChild(btn);
+        });
+
+        function executeAction(action) {
+            fetch('/api/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: action })
+            })
+            .then(r => r.json())
+            .then(data => {
+                showNotification(data.message);
+                loadStats();
             });
         }
-        function createParticles(){for(let i=0;i<60;i++){let p=document.createElement('div');p.className='particle';let s=Math.random()*6+2;p.style.width=s+'px';p.style.height=s+'px';p.style.left=Math.random()*100+'%';p.style.top=Math.random()*100+'%';p.style.animationDelay=Math.random()*20+'s';p.style.animationDuration=(Math.random()*15+10)+'s';document.getElementById('particles').appendChild(p);}}
-        document.getElementById('refresh-btn').addEventListener('click',loadData);
-        setInterval(loadData,5000);
-        createParticles();
-        loadData();
+
+        function showNotification(msg) {
+            const notif = document.createElement('div');
+            notif.className = 'notification';
+            notif.innerHTML = `<i class="fas fa-info-circle"></i> ${msg}`;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 2500);
+        }
+
+        let activityChart, topChart;
+
+        async function loadStats() {
+            try {
+                const statsRes = await fetch('/api/stats');
+                const stats = await statsRes.json();
+                document.getElementById('users').innerText = stats.users || 0;
+                document.getElementById('commands').innerText = stats.commands || 0;
+                document.getElementById('today').innerText = stats.today || 0;
+            } catch(e) {}
+
+            try {
+                const sysRes = await fetch('/api/system');
+                const sys = await sysRes.json();
+                document.getElementById('cpu').innerText = (sys.cpu || 0) + '%';
+                document.getElementById('ram-value').innerText = (sys.memory || 0) + '%';
+                document.getElementById('disk-value').innerText = (sys.disk || 0) + '%';
+                document.getElementById('battery-value').innerText = (sys.battery || 0) + '%';
+                document.getElementById('ip-value').innerText = sys.ip || '0.0.0.0';
+                document.getElementById('ram-fill').style.width = (sys.memory || 0) + '%';
+                document.getElementById('disk-fill').style.width = (sys.disk || 0) + '%';
+                document.getElementById('battery-fill').style.width = (sys.battery || 0) + '%';
+            } catch(e) {}
+
+            try {
+                const commandsRes = await fetch('/api/commands');
+                const commands = await commandsRes.json();
+                const historyDiv = document.getElementById('historyList');
+                if (!commands.length) {
+                    historyDiv.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><br>No commands yet</div>';
+                } else {
+                    historyDiv.innerHTML = commands.slice(0, 20).map(cmd => `
+                        <div class="history-item">
+                            <div class="history-command"><i class="fas fa-terminal"></i> ${escapeHtml(cmd.command)}</div>
+                            <div class="history-result">${escapeHtml(cmd.result.substring(0, 100))}${cmd.result.length > 100 ? '...' : ''}</div>
+                            <div class="history-time"><i class="far fa-clock"></i> ${new Date(cmd.time).toLocaleString()}</div>
+                        </div>
+                    `).join('');
+                }
+            } catch(e) {}
+
+            try {
+                const chartsRes = await fetch('/api/charts');
+                const charts = await chartsRes.json();
+
+                const daily = charts.daily || {};
+                const dates = Object.keys(daily).sort().reverse().slice(0, 7).reverse();
+                const counts = dates.map(d => daily[d] || 0);
+
+                if (activityChart) activityChart.destroy();
+                const actCtx = document.getElementById('activityChart').getContext('2d');
+                activityChart = new Chart(actCtx, {
+                    type: 'line',
+                    data: {
+                        labels: dates,
+                        datasets: [{
+                            label: 'Commands',
+                            data: counts,
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.05)',
+                            borderWidth: 2,
+                            pointBackgroundColor: '#3b82f6',
+                            pointBorderColor: '#fff',
+                            pointBorderWidth: 2,
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { labels: { color: '#e8e8f0' } }
+                        },
+                        scales: {
+                            y: { grid: { color: '#1f1f2a' }, ticks: { color: '#8a8a98' } },
+                            x: { grid: { color: '#1f1f2a' }, ticks: { color: '#8a8a98' } }
+                        }
+                    }
+                });
+
+                const topData = charts.top_commands || [];
+                if (topChart) topChart.destroy();
+                const topCtx = document.getElementById('topChart').getContext('2d');
+                topChart = new Chart(topCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: topData.map(t => t.name),
+                        datasets: [{
+                            label: 'Count',
+                            data: topData.map(t => t.count),
+                            backgroundColor: '#3b82f6',
+                            borderRadius: 8,
+                            barPercentage: 0.6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { labels: { color: '#e8e8f0' } }
+                        },
+                        scales: {
+                            y: { grid: { color: '#1f1f2a' }, ticks: { color: '#8a8a98' } },
+                            x: { ticks: { color: '#8a8a98', maxRotation: 45, minRotation: 45 } }
+                        }
+                    }
+                });
+            } catch(e) {}
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
+            });
+        }
+
+        document.getElementById('refreshBtn').addEventListener('click', loadStats);
+        setInterval(loadStats, 3000);
+        loadStats();
     </script>
 </body>
 </html>
@@ -1312,28 +1705,9 @@ def api_stats():
     conn.close()
     return jsonify({"users": users, "commands": cmds, "today": today_cmds})
 
-@app.route('/api/charts')
-def api_charts():
-    return jsonify(get_chart_data())
-
 @app.route('/api/commands')
 def api_commands():
     return jsonify(get_recent_commands(30))
-
-@app.route('/api/system')
-def api_system():
-    cpu = get_cpu_info()
-    mem = get_memory_info()
-    disk = get_disk_info()
-    battery = get_battery_info()
-    net = get_network_info()
-    return jsonify({
-        "cpu": cpu['percent'],
-        "memory": mem['percent'],
-        "disk": disk['percent'],
-        "battery": battery['percent'],
-        "ip": net['addresses'][0]['ip'] if net['addresses'] else 'unknown'
-    })
 
 @app.route('/api/action', methods=['POST'])
 def api_action():
@@ -1353,10 +1727,7 @@ def api_action():
 # ====================================================================================================
 def main():
     print("=" * 80)
-    print("🚀 СУПЕР БОТ v37 — ЗАПУЩЕН")
-    print(f"📱 Telegram бот активен")
-    print(f"🌐 Веб-панель: http://localhost:{WEB_PORT}")
-    print(f"👤 Владелец: {OWNER_ID}")
+    print("🚀 СУПЕР БОТ v38 — ЗАПУЩЕН")
     print("=" * 80)
 
     web_thread = threading.Thread(target=lambda: socketio.run(app, host=WEB_HOST, port=WEB_PORT, debug=False, allow_unsafe_werkzeug=True))
@@ -1364,7 +1735,14 @@ def main():
     web_thread.start()
     time.sleep(2)
 
-    tg_app = Application.builder().token(BOT_TOKEN).build()
+    custom_request = HTTPXRequest(
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0
+    )
+    
+    tg_app = Application.builder().token(BOT_TOKEN).request(custom_request).build()
     tg_app.add_handler(CommandHandler("start", start))
     tg_app.add_handler(CommandHandler("addnote", cmd_addnote))
     tg_app.add_handler(CommandHandler("mynotes", cmd_mynotes))
